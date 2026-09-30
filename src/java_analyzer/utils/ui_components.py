@@ -10,6 +10,15 @@ import plotly.graph_objects as go
 from datetime import datetime
 from typing import Dict, Any
 from utils.helpers import calculate_quality_score
+from utils.method_complexity_view import (
+    method_complexity_records,
+    filter_by_min_complexity,
+    severity_distribution,
+    top_methods,
+    summary_counts,
+    SEVERITY_ORDER,
+)
+from utils.defect_store import load_snapshot
 
 
 def render_executive_summary(df: pd.DataFrame, metrics: Dict[str, Any]):
@@ -369,3 +378,139 @@ def render_landing_page():
         """)
     
     st.info(" Upload a Java file from the sidebar to start your comprehensive code analysis")
+
+
+def render_method_complexity_panel():
+    """
+    Render the resident method-complexity section.
+
+    Data is always read as a fresh atomic snapshot of
+    ``data/defect_data.json`` so the numbers shown here match the file
+    exactly. A threshold switch filters methods by complexity and the
+    distribution chart plus TOP board consume the filtered rows.
+    """
+    st.markdown("### Method Complexity (Persistent Service)")
+
+    snapshot = load_snapshot()
+    all_rows = method_complexity_records(snapshot)
+
+    control_col, info_col = st.columns([1, 2])
+    with control_col:
+        filter_enabled = st.toggle(
+            "Filter by complexity",
+            value=False,
+            key="method_complexity_filter_enabled",
+            help="Hide methods below the selected complexity threshold.",
+        )
+    with info_col:
+        threshold = st.slider(
+            "Minimum complexity",
+            min_value=10,
+            max_value=40,
+            step=5,
+            value=10,
+            disabled=not filter_enabled,
+            key="method_complexity_threshold",
+        )
+
+    rows = (
+        filter_by_min_complexity(all_rows, threshold)
+        if filter_enabled
+        else all_rows
+    )
+
+    if not rows:
+        st.info(
+            "No method-complexity records yet. "
+            "POST a Java file path to /api/method-complexity to populate this panel."
+        )
+        return
+
+    counts = summary_counts(rows)
+    metric_col1, metric_col2, metric_col3, metric_col4 = st.columns(4)
+    metric_col1.metric("Methods Reported", counts["total"])
+    metric_col2.metric("Max Complexity", counts["max"])
+    metric_col3.metric("Avg Complexity", counts["average"])
+    metric_col4.metric("Critical / High", f"{counts['critical']} / {counts['high']}")
+
+    distribution = severity_distribution(rows)
+    distribution_df = pd.DataFrame(
+        {
+            "Severity": [
+                severity
+                for severity in SEVERITY_ORDER
+                if distribution.get(severity, 0) > 0
+            ],
+            "Count": [
+                distribution[severity]
+                for severity in SEVERITY_ORDER
+                if distribution.get(severity, 0) > 0
+            ],
+        }
+    )
+
+    chart_col, top_col = st.columns(2)
+    with chart_col:
+        if not distribution_df.empty:
+            fig = px.bar(
+                distribution_df,
+                x="Severity",
+                y="Count",
+                title="Complexity Severity Distribution",
+                color="Severity",
+                color_discrete_map={
+                    "Critical": "#DC3545",
+                    "High": "#FD7E14",
+                    "Medium": "#FFC107",
+                    "Low": "#28A745",
+                },
+            )
+            fig.update_layout(showlegend=False, height=380)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No rows match the current filter.")
+
+    with top_col:
+        top_rows = top_methods(rows, limit=10)
+        if top_rows:
+            top_df = pd.DataFrame(top_rows)[
+                ["complexity", "class_name", "method_name", "start_line", "file"]
+            ]
+            top_df.columns = [
+                "Complexity",
+                "Class",
+                "Method",
+                "Line",
+                "File",
+            ]
+            st.markdown("**TOP Complexity Methods**")
+            st.dataframe(
+                top_df,
+                use_container_width=True,
+                hide_index=True,
+                height=380,
+            )
+
+    table_df = pd.DataFrame(rows)[
+        [
+            "complexity",
+            "severity",
+            "class_name",
+            "method_name",
+            "signature",
+            "start_line",
+            "file",
+            "recorded_at",
+        ]
+    ]
+    table_df.columns = [
+        "Complexity",
+        "Severity",
+        "Class",
+        "Method",
+        "Signature",
+        "Line",
+        "File",
+        "Recorded At",
+    ]
+    st.dataframe(table_df, use_container_width=True, hide_index=True)

@@ -33,8 +33,9 @@ class CodeSmell(ABC):
         """
         pass
     
-    def _create_issue(self, smell_type: str, target: str, severity: str, 
-                      reason: str, category: str) -> Dict[str, Any]:
+    def _create_issue(self, smell_type: str, target: str, severity: str,
+                      reason: str, category: str,
+                      **extra: Any) -> Dict[str, Any]:
         """
         Helper method to create a standardized issue dictionary.
         
@@ -45,13 +46,19 @@ class CodeSmell(ABC):
             reason: Detailed explanation
             category: Issue category
             
+            extra: Additional structured fields attached to the issue
+                (e.g. method name, class name, start line, complexity)
+
         Returns:
             Standardized issue dictionary
         """
-        return {
+        issue = {
             "Type": smell_type,
             "Target": target,
             "Severity": severity,
             "Reason": reason,
             "Category": category
         }
+        if extra:
+            issue.update(extra)
+        return issue

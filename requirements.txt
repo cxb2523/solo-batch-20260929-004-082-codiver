@@ -3,3 +3,5 @@ pandas>=2.0.0
 plotly>=5.18.0
 numpy>=1.24.0
 javalang>=0.13.0
+# Test dependencies
+pytest>=8.0.0

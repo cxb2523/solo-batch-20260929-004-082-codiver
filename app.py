@@ -10,6 +10,50 @@ ROOT_DIR = Path(__file__).parent
 sys.path.append(str(ROOT_DIR / "src"))
 sys.path.append(str(ROOT_DIR / "src" / "java_analyzer"))
 
+# Running this file with plain `python app.py` relaunches it under
+# Streamlit, so the resident analysis service and dashboard come up
+# together in one process.
+def _running_under_streamlit() -> bool:
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+    except ImportError:  # pragma: no cover - older streamlit fallbacks
+        try:
+            from streamlit.scriptrunner import get_script_run_ctx  # type: ignore
+        except ImportError:
+            return True
+    return get_script_run_ctx() is not None
+
+
+if not _running_under_streamlit():
+    import subprocess
+
+    # Start the resident API service before Streamlit so the endpoint
+    # is live as soon as the page is; the Streamlit child adopts it.
+    sys.path.insert(0, str(ROOT_DIR / "src"))
+    sys.path.insert(0, str(ROOT_DIR / "src" / "java_analyzer"))
+    try:
+        from service_bootstrap import start_service_thread
+
+        service_port = start_service_thread()
+        if service_port is not None:
+            print(f"Method-complexity API listening on 127.0.0.1:{service_port}")
+    except Exception as error:  # pragma: no cover - launcher best effort
+        print(f"Warning: method-complexity service did not start: {error}")
+
+    streamlit_arguments = [
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        str(Path(__file__).resolve()),
+    ]
+    streamlit_arguments.extend(sys.argv[1:])
+    subprocess.run(
+        streamlit_arguments,
+        check=False,
+    )
+    sys.exit(0)
+
 # Global Page Configuration
 st.set_page_config(
     page_title="CoDiver: Code Sniffer & Project Analyzer",
@@ -42,8 +86,10 @@ from java_analyzer.dashboard import (
     initialize_session_state,
     handle_analysis as handle_java_analysis,
     display_analysis_results as display_java_results,
-    render_file_info as render_java_file_info
+    render_file_info as render_java_file_info,
+    start_method_complexity_service,
 )
+from java_analyzer.utils.ui_components import render_method_complexity_panel
 
 # Import Python/Agile dependencies
 from software_metrics.calculators.code_analyzer import analyze_python_file
@@ -59,6 +105,9 @@ from software_metrics.ui.components.charts import (
 
 # Initialize Java session state
 initialize_session_state()
+
+# Start POST /api/method-complexity inside this same process.
+start_method_complexity_service()
 
 def render_unified_landing():
     st.markdown('<h1 class="main-header"> CoDiver: Code Sniffer & Project Analyzer</h1>', unsafe_allow_html=True)
@@ -266,6 +315,11 @@ def main():
                 else:
                     st.info("Click 'Execute CoDiver Analysis' in the sidebar to process Agile Data.")
             tab_idx += 1
+
+    # Persistent method-complexity service board. Always visible so the
+    # distribution and TOP board can be inspected without an upload.
+    st.markdown("---")
+    render_method_complexity_panel()
 
 if __name__ == "__main__":
     main()

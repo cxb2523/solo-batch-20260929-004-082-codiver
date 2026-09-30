@@ -11,6 +11,7 @@ import pandas as pd
 from datetime import datetime
 
 from analyzer_engine import StaticAnalyzerEngine
+from service_bootstrap import start_service_thread, active_port
 from utils.ui_components import (
     render_executive_summary,
     render_code_metrics,
@@ -18,9 +19,21 @@ from utils.ui_components import (
     render_detailed_findings,
     render_source_code_viewer,
     render_summary_report,
-    render_landing_page
+    render_landing_page,
+    render_method_complexity_panel,
 )
 from utils.helpers import format_file_size
+
+
+def start_method_complexity_service():
+    """
+    Start POST /api/method-complexity in this same dashboard process.
+
+    Safe to call on every Streamlit re-run. When ``python app.py``
+    launched the service before spawning Streamlit, the existing
+    instance is adopted and no second socket is bound.
+    """
+    return start_service_thread()
 
 
 def initialize_session_state():
@@ -210,6 +223,9 @@ def main():
     # Initialize
     initialize_session_state()
     configure_page()
+
+    # The resident analysis service lives in the same process.
+    start_method_complexity_service()
     
     # Render header
     render_header()
@@ -242,10 +258,17 @@ def main():
         
         # Display results if they exist
         display_analysis_results()
+
+        # Persistent method-complexity board backed by data/defect_data.json
+        st.markdown("---")
+        render_method_complexity_panel()
     
     else:
         # Show landing page when no file is uploaded
         render_landing_page()
+
+        st.markdown("---")
+        render_method_complexity_panel()
 
 
 if __name__ == "__main__":

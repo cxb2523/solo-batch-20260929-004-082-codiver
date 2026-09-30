@@ -9,6 +9,11 @@ from detectors.base import CodeSmell
 from detectors.design import DesignSmells
 from detectors.implementation import ImplementationSmells
 from detectors.naming_docs import NamingSmells, DocumentationSmells
+from detectors.method_complexity import (
+    MethodComplexitySmells,
+    ISSUE_TYPE as METHOD_COMPLEXITY_TYPE,
+    cyclomatic_complexity,
+)
 from utils.helpers import count_blank_lines, count_comment_lines
 
 
@@ -32,7 +37,8 @@ class StaticAnalyzerEngine:
             'design': True,
             'implementation': True,
             'naming': True,
-            'documentation': True
+            'documentation': True,
+            'method_complexity': True,
         }
         self.detectors: List[CodeSmell] = self._initialize_detectors()
     
@@ -52,6 +58,8 @@ class StaticAnalyzerEngine:
             detectors.append(NamingSmells())
         if self.config.get('documentation', True):
             detectors.append(DocumentationSmells())
+        if self.config.get('method_complexity', True):
+            detectors.append(MethodComplexitySmells())
         return detectors
     
     def run(self) -> Tuple[List[Dict[str, Any]], javalang.tree.CompilationUnit]:
@@ -73,6 +81,8 @@ class StaticAnalyzerEngine:
             for detector in self.detectors:
                 issues = detector.detect(tree, self.lines)
                 all_issues.extend(issues)
+
+            all_issues = self._reconcile_complexity_issues(all_issues)
             
             return all_issues, tree
             
@@ -156,18 +166,45 @@ class StaticAnalyzerEngine:
         Returns:
             Cyclomatic complexity value
         """
-        count = 1
-        branch_types = (
-            javalang.tree.IfStatement,
-            javalang.tree.WhileStatement,
-            javalang.tree.DoStatement,
-            javalang.tree.ForStatement,
-            javalang.tree.CatchClause,
-            javalang.tree.SwitchStatementCase,
-            javalang.tree.TernaryExpression
-        )
-        
-        for _, node in method_node.filter(branch_types):
-            count += 1
-        
-        return count
+        return cyclomatic_complexity(method_node)
+
+    @staticmethod
+    def _reconcile_complexity_issues(
+        issues: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Keep a single defect per method identity and avoid double counting.
+
+        The structured Method Complexity detector supersedes the legacy
+        implementation-level "High Complexity" finding (strict >10) for
+        the same method, otherwise complexity defects would be counted
+        twice. Dedup key: ``(ClassName, Signature, StartLine)``.
+        """
+        covered_method_names = set()
+        for issue in issues:
+            if issue.get("Type") != METHOD_COMPLEXITY_TYPE:
+                continue
+            covered_method_names.add(issue.get("MethodName"))
+
+        reconciled = []
+        seen_keys = set()
+        for issue in issues:
+            if issue.get("Type") == METHOD_COMPLEXITY_TYPE:
+                key = (
+                    issue.get("ClassName"),
+                    issue.get("Signature"),
+                    issue.get("StartLine"),
+                )
+                if key in seen_keys:
+                    continue
+                seen_keys.add(key)
+                reconciled.append(issue)
+            elif (
+                issue.get("Type") == "High Complexity"
+                and issue.get("Target") in covered_method_names
+            ):
+                continue
+            else:
+                reconciled.append(issue)
+
+        return reconciled
