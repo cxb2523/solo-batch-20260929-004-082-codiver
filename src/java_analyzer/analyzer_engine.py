@@ -9,6 +9,13 @@ from detectors.base import CodeSmell
 from detectors.design import DesignSmells
 from detectors.implementation import ImplementationSmells
 from detectors.naming_docs import NamingSmells, DocumentationSmells
+from detectors.method_complexity import (
+    MethodComplexityDetector,
+    calculate_method_complexity,
+    build_method_signature,
+    method_start_line,
+    complexity_severity,
+)
 from utils.helpers import count_blank_lines, count_comment_lines
 
 
@@ -32,8 +39,13 @@ class StaticAnalyzerEngine:
             'design': True,
             'implementation': True,
             'naming': True,
-            'documentation': True
+            'documentation': True,
+            'complexity': True,
         }
+        # Most recently parsed tree.  Method-level analysis reuses this
+        # result whenever it is still available; only a missing tree
+        # triggers a method-level second parse.
+        self.tree = None
         self.detectors: List[CodeSmell] = self._initialize_detectors()
     
     def _initialize_detectors(self) -> List[CodeSmell]:
@@ -52,6 +64,8 @@ class StaticAnalyzerEngine:
             detectors.append(NamingSmells())
         if self.config.get('documentation', True):
             detectors.append(DocumentationSmells())
+        if self.config.get('complexity', True):
+            detectors.append(MethodComplexityDetector())
         return detectors
     
     def run(self) -> Tuple[List[Dict[str, Any]], javalang.tree.CompilationUnit]:
@@ -67,6 +81,7 @@ class StaticAnalyzerEngine:
         try:
             # Parse the Java source code into an AST
             tree = javalang.parse.parse(self.code)
+            self.tree = tree
             
             # Run all detectors
             all_issues = []
@@ -146,28 +161,40 @@ class StaticAnalyzerEngine:
         
         return metrics
     
-    def _calculate_complexity(self, method_node: javalang.tree.MethodDeclaration) -> int:
+    def analyze_methods(self, tree: javalang.tree.CompilationUnit = None) -> List[Dict[str, Any]]:
         """
-        Calculate cyclomatic complexity for a method.
+        Analyze cyclomatic complexity at the method level.
         
+        The already-parsed engine tree is reused when available; only when
+        no tree exists is a method-level parse performed.  Class
+        declarations are traversed purely to attribute each method to its
+        owning class - the file is never re-scanned by every detector.
+
         Args:
-            method_node: AST node representing a method
+            tree: Optional pre-parsed AST.  Falls back to the tree
+                produced by :meth:`run`, then to a fresh parse.
             
         Returns:
-            Cyclomatic complexity value
+            One record per method with keys: method_name, class_name,
+            signature, line, complexity, severity.
         """
-        count = 1
-        branch_types = (
-            javalang.tree.IfStatement,
-            javalang.tree.WhileStatement,
-            javalang.tree.DoStatement,
-            javalang.tree.ForStatement,
-            javalang.tree.CatchClause,
-            javalang.tree.SwitchStatementCase,
-            javalang.tree.TernaryExpression
-        )
-        
-        for _, node in method_node.filter(branch_types):
-            count += 1
-        
-        return count
+        tree = tree or self.tree or javalang.parse.parse(self.code)
+        self.tree = tree
+
+        records: List[Dict[str, Any]] = []
+        for _, class_node in tree.filter(javalang.tree.ClassDeclaration):
+            for method_node in class_node.methods or []:
+                complexity = calculate_method_complexity(method_node)
+                records.append({
+                    'method_name': method_node.name,
+                    'class_name': class_node.name,
+                    'signature': build_method_signature(method_node),
+                    'line': method_start_line(method_node),
+                    'complexity': complexity,
+                    'severity': complexity_severity(complexity),
+                })
+        return records
+
+    def _calculate_complexity(self, method_node: javalang.tree.MethodDeclaration) -> int:
+        """Calculate cyclomatic complexity for a method (shared implementation)."""
+        return calculate_method_complexity(method_node)

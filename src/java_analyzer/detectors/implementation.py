@@ -6,17 +6,21 @@ Identifies implementation-level code smells and complexity issues
 from typing import List, Dict, Any
 import javalang
 from detectors.base import CodeSmell
+from detectors.method_complexity import calculate_method_complexity
 
 
 class ImplementationSmells(CodeSmell):
     """
     Detects implementation-level code smells including:
-    - High Cyclomatic Complexity
     - Long Methods
     - Long Parameter Lists
     - Empty Catch Blocks
     - Magic Numbers
     - Deep Nesting
+
+    Method-level cyclomatic complexity is reported separately by
+    ``MethodComplexityDetector`` and is intentionally not duplicated here
+    so the same method is never counted twice across detectors.
     """
     
     def detect(self, tree: javalang.tree.CompilationUnit, lines: List[str]) -> List[Dict[str, Any]]:
@@ -24,7 +28,6 @@ class ImplementationSmells(CodeSmell):
         results = []
         
         for _, node in tree.filter(javalang.tree.MethodDeclaration):
-            results.extend(self._detect_high_complexity(node))
             results.extend(self._detect_long_method(node))
             results.extend(self._detect_long_parameter_list(node))
             results.extend(self._detect_empty_catch_blocks(node))
@@ -32,22 +35,7 @@ class ImplementationSmells(CodeSmell):
             results.extend(self._detect_deep_nesting(node))
         
         return results
-    
-    def _detect_high_complexity(self, node: javalang.tree.MethodDeclaration) -> List[Dict[str, Any]]:
-        """Detect methods with high cyclomatic complexity."""
-        results = []
-        complexity = self._calculate_complexity(node)
-        
-        if complexity > 10:
-            results.append(self._create_issue(
-                "High Complexity",
-                node.name,
-                "High",
-                f"Cyclomatic complexity: {complexity}",
-                "Implementation"
-            ))
-        return results
-    
+   
     def _detect_long_method(self, node: javalang.tree.MethodDeclaration) -> List[Dict[str, Any]]:
         """Detect methods that are too long."""
         results = []
@@ -125,21 +113,7 @@ class ImplementationSmells(CodeSmell):
     
     def _calculate_complexity(self, method_node: javalang.tree.MethodDeclaration) -> int:
         """Calculate cyclomatic complexity of a method."""
-        count = 1
-        branch_types = (
-            javalang.tree.IfStatement,
-            javalang.tree.WhileStatement,
-            javalang.tree.DoStatement,
-            javalang.tree.ForStatement,
-            javalang.tree.CatchClause,
-            javalang.tree.SwitchStatementCase,
-            javalang.tree.TernaryExpression
-        )
-        
-        for _, node in method_node.filter(branch_types):
-            count += 1
-        
-        return count
+        return calculate_method_complexity(method_node)
     
     def _count_magic_numbers(self, method_node: javalang.tree.MethodDeclaration) -> int:
         """Count magic numbers (excluding 0, 1, -1)."""
